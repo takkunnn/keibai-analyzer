@@ -1,19 +1,21 @@
 package realestate.keibai_analyzer;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.seasar.doma.jdbc.tx.TransactionManager;
 
-public class PastKeibaiDataCollector {
+import realestate.keibai_analyzer.entity.KakoData;
+import realestate.keibai_analyzer.setting.AppConfig;
+
+public class PastKeibaiDataManager {
     
-    private static final String CONDITION_PARTS = "menuKey=&mojiSize=1&screenId=SCPT003&screenURI=SCPT001%2CSCPT003&"
+    private static final String BODY_FRAGMENT = "menuKey=&mojiSize=1&screenId=SCPT003&screenURI=SCPT001%2CSCPT003&"
                                                       + "maxage=2147483647&prefecturesId=11&hdnPeriodId=3&hdnFiscalYearId=2016&"
                                                       + "hdnEraId=04&hdnBuildYear=13&hdnObjPeriodId=1&kind=2&ymSelect=0&periodId=3&"
                                                       + "saleAmountLowerId=0&saleAmountUpperId=1000&landClsId=00&buildingCoverageLower=&"
@@ -25,14 +27,31 @@ public class PastKeibaiDataCollector {
                                                       + "balconyAreaUpper=&totalNoLower=&totalNoUpper=";
     
     public static void collect(){
-        CitiesConfig.list().stream().forEach(cityConfig -> {
-            fetchPastDataPerCity(cityConfig).stream().forEach(singleData -> {
-                // TODO:DB登録
+        
+        TransactionManager tm = AppConfig.singleton().getTransactionManager();
+        KakoDataDaoImpl dao = new KakoDataDaoImpl();
+        
+        tm.required(() -> {
+            CitiesConfig.list().forEach(cityConfig -> {
+                List<KakoData> cityDatas = fetchPastDataPerCity(cityConfig);
+                dao.insert(cityDatas);
+            });
+        });
+        
+    }
+    
+    public static void showCityAverageData() {
+        TransactionManager tm = AppConfig.singleton().getTransactionManager();
+        KakoDataDaoImpl dao = new KakoDataDaoImpl();
+        
+        tm.required(() -> {
+            dao.selectCityAverage().forEach(data -> {
+                System.out.println(data);
             });
         });
     }
     
-    static List<Map<String, Object>> fetchPastDataPerCity(Map<String, String> city) {
+    static List<KakoData> fetchPastDataPerCity(Map<String, String> city) {
         Connection con = Jsoup.connect("http://bit.sikkou.jp/app/past/pt003/h20")
                 .header("Host", "bit.sikkou.jp")
                 .header("Connection", "keep-alive")
@@ -48,7 +67,7 @@ public class PastKeibaiDataCollector {
                 .header("Cookie", "HEAD_COUNTER=2078; HEAD_TIMESTAMP=20160522063004; MOJI_SIZE=1");
         
         String body = new StringBuilder()
-                .append(CONDITION_PARTS)
+                .append(BODY_FRAGMENT)
                 .append("&").append("courtId=").append(city.get("courtId"))
                 .append("&").append("municipalityId=").append(city.get("municipalityId")).toString();
         con.requestBody(body);
@@ -60,13 +79,14 @@ public class PastKeibaiDataCollector {
             throw new RuntimeException(e);
         }
         
-        List<Map<String, Object>> perCity = new ArrayList<Map<String, Object>>();
+        List<KakoData> perCity = new ArrayList<KakoData>();
         
         doc.select("tr:has(.blk_largetxt)")
            .forEach(tr -> {
-               Map<String, Object> singleData = new HashMap<String, Object>();
-               singleData.put("base", new BigDecimal(tr.select(".blk_largetxt").text().replaceAll(",", "")));
-               singleData.put("actual", new BigDecimal(tr.select(".org_largetxt").text().replaceAll(",", "")));
+               KakoData singleData = new KakoData();
+               singleData.basePrice = new Integer(tr.select(".blk_largetxt").text().replaceAll(",", ""));
+               singleData.actualPrice = new Integer(tr.select(".org_largetxt").text().replaceAll(",", ""));
+               singleData.municipalityId = city.get("municipalityId");
                
                perCity.add(singleData);
             });
